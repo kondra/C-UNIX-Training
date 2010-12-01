@@ -52,7 +52,7 @@ char *str_tok(char *str, char *delim)
 
 int main(void)
 {
-    freopen("input", "r", stdin);
+//    freopen("input", "r", stdin);
 
     char str[MAXLEN], delim[MAXLEN], *cur;
     int i;
