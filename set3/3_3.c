@@ -2,8 +2,14 @@
 #include <string.h>
 
 const int TEMPLATE_NUM = 2;
-const int TEMPLATE_LEN = 30;
-const int STRING_LEN = 5000;
+const int TEMPLATE_LEN = 22;
+
+enum
+{
+    TEXT = 1,
+    FIRST_LETTER,
+    TEMPLATE
+};
 
 int is_alpha(char c)
 {
@@ -21,82 +27,98 @@ int is_digit(char c)
     return 0;
 }
 
-int str_len(char *cs)
-{
-    int n = 0;
-    while (cs[n++])
-        ;
-    return n - 1;
-}
-
-int is_valid_key(char *ct)
-{
-    int j;
-    if (!is_alpha(ct[1]))
-        return 0;
-    for (j = 1; ct[j] != '%'; j++)
-        if (!is_alpha(ct[j]) && !is_digit(ct[j]))
-            return 0;
-    return 1;
-}
-
 int main(void)
 {
-//    freopen ("input", "r", stdin);
-
     char key[TEMPLATE_NUM][TEMPLATE_LEN], value[TEMPLATE_NUM][TEMPLATE_LEN];
-    char str[STRING_LEN];
-    char res[STRING_LEN];
-    int i, j, k, l, n;
-    int flag;
+    char buf[TEMPLATE_LEN];
+    char c;
+    int state, matched;
+    int i, j, curpos;
+
+//    freopen("input", "r", stdin);
 
     for (i = 0; i < TEMPLATE_NUM; i++) {
-        scanf("%s%s\n", key[i], value[i]);
-        if (!is_valid_key(key[i])) {
+        getchar();
+        for (j = 0; (c = getchar()) != '%'; j++)
+            key[i][j] = c;
+        key[i][j] = '\0';
+        getchar();
+        scanf("%s\n", value[i]);
+        if (!is_alpha(key[i][0])) {
             printf("ERROR");
             return 0;
         }
-    }
-    fgets(str, STRING_LEN, stdin);
-    n = str_len(str);
-
-    for (k = 0, i = 0; i < n; i++) {
-        if (str[i] == '%') {
-            if (str[i + 1] == '%') {
-                res[k++] = '%';
-                i++;
-                continue;
-            }
-            if (!is_valid_key(str + i)) {
+        for (j = 0; key[i][j]; j++) {
+            if (!(is_alpha(key[i][j]) || is_digit(key[i][j]))) {
                 printf("ERROR");
                 return 0;
             }
-            for (flag = 0, j = 0; j < TEMPLATE_NUM; j++) {
-                for (flag = 1, l = 1; str[i + l] != '%' && key[j][l] != '%'; l++) {
-                    if (str[i + l] != key[j][l]) {
-                        flag = 0;
+        }
+    }
+
+    state = TEXT;
+    while ((c = getchar()) != EOF) {
+        if (c == '\n')
+            break;
+        if (state == TEXT) {
+            if (c == '%') {
+                state = FIRST_LETTER;
+                continue;
+            }
+            putchar(c);
+            continue;
+        }
+        if (state == FIRST_LETTER) {
+            if (c == '%') {
+                putchar('%');
+                state = TEXT;
+                continue;
+            }
+            if (!is_alpha(c)) {
+                printf("ERROR");
+                return 0;
+            }
+            curpos = 0;
+            buf[curpos++] = c;
+            state = TEMPLATE;
+            continue;
+        }
+        if (state == TEMPLATE) {
+            if (c == '%') {
+                buf[curpos] = '\0';
+                for (i = 0; i < TEMPLATE_NUM; i++) {
+                    for (matched = 0, j = 0; buf[j] == key[i][j]; j++) {
+                        if (buf[j] == '\0') {
+                            matched = 1;
+                            break;
+                        }
+                    }
+                    if (matched) {
+                        printf("%s", value[i]);
                         break;
                     }
                 }
-                if (!flag)
-                    continue;
-                for (l = 0; value[j][l]; l++)
-                    res[k++] = value[j][l];
-                i += str_len(key[j]) - 1;
-                break;
+                if (!matched)
+                    printf("%%%s%%", buf);
+                state = TEXT;
+                continue;
             }
-            if (!flag) {
-                res[k++] = '%';
-                for (i++; str[i] != '%'; i++)
-                    res[k++] = str[i];
-                res[k++] = '%';
+            if (!(is_alpha(c) || is_digit(c))) {
+                printf("ERROR");
+                return 0;
             }
+            if (curpos > TEMPLATE_LEN) {
+                printf("ERROR");
+                return 0;
+            }
+            buf[curpos++] = c;
             continue;
         }
-        res[k++] = str[i];
     }
-    res[k] = '\0';
-    printf ("%s\n", res);
+    if (state != TEXT) {
+        printf("ERROR");
+        return 0;
+    }
 
     return 0;
 }
