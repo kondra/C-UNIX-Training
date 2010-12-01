@@ -27,14 +27,12 @@ int main(int argc, char **argv)
     st = scanf("%d", &num);
     for (i = 0; i < num; i++) {
         st = scanf("%d%d%d", &id, &msg, &len);
-        len--;
 
         assert(write(1, &id, sizeof (int)));
         assert(write(1, &msg, sizeof (int)));
         assert(write(1, &len, sizeof (int)));
 
-        st = scanf("%d", &node);
-        for (j = 1; j <= len; j++) {
+        for (j = 0; j < len; j++) {
             st = scanf("%d", &node);
             assert(write(1, &node, sizeof (int)));
         }
