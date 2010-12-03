@@ -25,7 +25,7 @@
 #define DEBUG
 
 #ifdef DEBUG
-#define debug(...) do { fprintf(stderr, "DEBUG (%d): ", getpid()); fprintf(stderr, __VA_ARGS__); } while (0)
+#define debug(...) do { fprintf(stderr, "DEBUG (%d): ", getpid()); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while (0)
 #else
 #define debug(...)
 #endif
@@ -90,19 +90,19 @@ GraphData *data_read(void)
     int **vmatrix, v1, v2;
     char buf[MAX_PATH_LEN], *ch;
 
-    data = (GraphData*) malloc(sizeof (GraphData));
+    data = (GraphData*) malloc(sizeof(GraphData));
     assert(data != NULL);
 
     st = scanf("%d%d%d", &data->r, &data->b, &data->m);
 
-    data->red = (struct red_edge*) malloc(sizeof (struct red_edge) * data->r);
-    data->vmatrix = (int**) calloc(data->b, sizeof (int*));
+    data->red = (struct red_edge*) malloc(sizeof(struct red_edge) * data->r);
+    data->vmatrix = (int**) calloc(data->b, sizeof(int*));
 
-    data->write_num = (int*) calloc(data->b, sizeof (int));
-    data->read_num = (int*) calloc(data->b, sizeof (int));
+    data->write_num = (int*) calloc(data->b, sizeof(int));
+    data->read_num = (int*) calloc(data->b, sizeof(int));
 
     for (i = 0; i < data->b; i++) {
-        data->vmatrix[i] = (int*) calloc(data->b, sizeof (int));
+        data->vmatrix[i] = (int*) calloc(data->b, sizeof(int));
     }
     vmatrix = data->vmatrix;
 
@@ -112,7 +112,7 @@ GraphData *data_read(void)
 
         ch = fgets(buf, MAX_PATH_LEN, stdin);
         len = strlen(buf);
-        data->red[i].filename = (char*) malloc(sizeof (char) * (len - 1));
+        data->red[i].filename = (char*) malloc(sizeof(char) * (len - 1));
         buf[len - 1] = '\0';
         strcpy(data->red[i].filename, buf + 1);
         data->red[i].filename[len - 1] = '\0';
@@ -138,7 +138,7 @@ Message *message_read(int fd, int *status)
 
     set_nonblock(fd);
 
-    st = read(fd, &t, sizeof (int));
+    st = read(fd, &t, sizeof(int));
 
     if (st == 0) {
         if (status)
@@ -154,19 +154,19 @@ Message *message_read(int fd, int *status)
         }
     }
 
-    msg = (Message*) malloc(sizeof (Message));
+    msg = (Message*) malloc(sizeof(Message));
     msg->id = t;
 
     set_block(fd);
 
-    st = read(fd, &msg->msg, sizeof (int));
+    st = read(fd, &msg->msg, sizeof(int));
     assert(st != -1);
-    st = read(fd, &msg->len, sizeof (int));
+    st = read(fd, &msg->len, sizeof(int));
     assert(st != -1);
 
-    msg->node = (int*) malloc(sizeof (int) * msg->len);
+    msg->node = (int*) malloc(sizeof(int) * msg->len);
     for (i = 0; i < msg->len; i++) {
-        st = read(fd, &msg->node[i], sizeof (int));
+        st = read(fd, &msg->node[i], sizeof(int));
         assert(st != -1);
     }
 
@@ -192,15 +192,15 @@ void message_send(int fd, Message *msg)
     int i, st;
 
     msg->len--;
-    st = write(fd, &msg->id, sizeof (int));
+    st = write(fd, &msg->id, sizeof(int));
     assert(st != -1);
-    st = write(fd, &msg->msg, sizeof (int));
+    st = write(fd, &msg->msg, sizeof(int));
     assert(st != -1);
-    st = write(fd, &msg->len, sizeof (int));
+    st = write(fd, &msg->len, sizeof(int));
     assert(st != -1);
 
     for (i = 1; i <= msg->len; i++) {
-        st = write(fd, &msg->node[i], sizeof (int));
+        st = write(fd, &msg->node[i], sizeof(int));
         assert(st != -1);
     }
 }
@@ -226,7 +226,7 @@ Pipe *pipes_create(int num)
 
     int i, st;
 
-    tmp = (Pipe*) malloc(sizeof (Pipe) * num);
+    tmp = (Pipe*) malloc(sizeof(Pipe) * num);
     for (i = 0; i < num; i++) {
         st = pipe(tmp[i].fd);
         if (st == -1)
@@ -243,9 +243,9 @@ Pipe **blue_pipe_create(GraphData *data)
     int **vmatrix = data->vmatrix;
     int i, j, k;
 
-    bp = (Pipe**) malloc(sizeof (Pipe*) * data->b);
+    bp = (Pipe**) malloc(sizeof(Pipe*) * data->b);
     for (i = 0; i < data->b; i++) {
-        bp[i] = (Pipe*) malloc(sizeof (Pipe) * data->write_num[i]);
+        bp[i] = (Pipe*) malloc(sizeof(Pipe) * data->write_num[i]);
         bp[i] = pipes_create(data->write_num[i]);
         for (k = 0, j = 0; j < data->b; j++) {
             if (vmatrix[i][j] == 1) {
@@ -267,13 +267,13 @@ void wait_sem(int *sem)
     set_nonblock(sem[0]);
     while (1) {
         usleep(100);
-        st = read(sem[0], &mark, sizeof (int));
+        st = read(sem[0], &mark, sizeof(int));
         if (st == 0)
             return;
         if (st < 0 && errno == EAGAIN)
                 return;
-        if (st == sizeof (int)) {
-            st = write(sem[1], &mark, sizeof (int));
+        if (st == sizeof(int)) {
+            st = write(sem[1], &mark, sizeof(int));
             assert(st != -1);
             continue;
         }
@@ -311,7 +311,7 @@ int main(int argc, char **argv)
     red_pipe = pipes_create(r);
     blue_pipe = blue_pipe_create(data);
 
-    blue_pids = (pid_t*) malloc(sizeof (pid_t) * b);
+    blue_pids = (pid_t*) malloc(sizeof(pid_t) * b);
 
     //sync pipes
     if (pipe(sem))
@@ -327,8 +327,8 @@ int main(int argc, char **argv)
             int lock, l, k, s;
 
             lock = 0;
-            redp = (int*) malloc(sizeof (int) * r);
-            isdead = (int*) malloc(sizeof (int) * r);
+            redp = (int*) malloc(sizeof(int) * r);
+            isdead = (int*) malloc(sizeof(int) * r);
             //closing red pipes
             for (k = 0, j = 0; j < r; j++) {
                 if (data->red[j].node == i) {
@@ -342,11 +342,11 @@ int main(int argc, char **argv)
             }
             redp_num = k;
             for (j = 0; j < redp_num; j++)
-                st = write(sem[1], &mark, sizeof (int));
+                st = write(sem[1], &mark, sizeof(int));
 
             //copy pipes from which we read for faster access
             //and close them for writing, also close other pipes which we don't use in this process
-            read_pipe = (Pipe*) malloc(sizeof (Pipe) * data->read_num[i]);
+            read_pipe = (Pipe*) malloc(sizeof(Pipe) * data->read_num[i]);
             for (k = 0, j = 0; j < b; j++) {
                 if (j == i)
                     continue;
@@ -381,7 +381,7 @@ int main(int argc, char **argv)
                         break;
                     } else if (s == -1) {
                         //eof in pipe, so red is dead, and we will not receive smth from this one
-                        st = read(sem[0], &mark, sizeof (int));
+                        st = read(sem[0], &mark, sizeof(int));
                         isdead[j] = 1;
                         s = 0;
                     }
@@ -394,7 +394,7 @@ int main(int argc, char **argv)
                 } else {
                     //if we've received something from red pipe
                     //we have a new packet in network
-                    st = write(sem[1], &mark, sizeof (int));
+                    st = write(sem[1], &mark, sizeof(int));
                 }
 
                 //try again
@@ -409,7 +409,7 @@ int main(int argc, char **argv)
 
                 if (st == MSG_ERROR || st == MSG_END) {
                     //message is dead now
-                    st = read(sem[0], &mark, sizeof (int));
+                    st = read(sem[0], &mark, sizeof(int));
                     message_destroy(msg);
                     continue;
                 }
@@ -437,7 +437,7 @@ int main(int argc, char **argv)
         pipes_close(blue_pipe[i], data->write_num[i]);
 
     //create red processes
-    red_pids = (pid_t*) malloc(sizeof (pid_t) * r);
+    red_pids = (pid_t*) malloc(sizeof(pid_t) * r);
     for (i = 0; i < r; i++) {
         if ((pid = fork()) == 0) {
             char *filename = data->red[i].filename;
@@ -507,9 +507,9 @@ int main(int argc, char **argv)
 
 END:
     //tell monster to kill our children
-    st = write(monster_pipe[1], &b, sizeof (int));
+    st = write(monster_pipe[1], &b, sizeof(int));
     for (i = 0; i < b; i++) {
-        st = write(monster_pipe[1], &blue_pids[i], sizeof (int));
+        st = write(monster_pipe[1], &blue_pids[i], sizeof(int));
     }
     close(monster_pipe[1]);
 
