@@ -71,15 +71,16 @@ int main(void)
     signal(SIGUSR2, sig_handler);
 
     i = 0;
-    g_pid[i++] = create(SIGUSR1, getppid());
-    g_pid[i++] = create(SIGUSR2, getppid());
-    s_pid1 = g_pid[i++] = create(SIGUSR1, g_pid[1]);
-    s_pid2 = g_pid[i++] = create(SIGUSR1, g_pid[0]);
+    g_pid[i++] = create(SIGUSR1, getpid());
+    g_pid[i++] = create(SIGUSR2, getpid());
+    g_pid[i++] = s_pid1 = create(SIGUSR1, g_pid[1]);
+    g_pid[i++] = s_pid2 = create(SIGUSR1, g_pid[0]);
 
     signal(SIGINT, sig_handler);
 
     sig = SIGUSR1;
     st = write(fd[1], &msg, sizeof(int));
+
     kill(s_pid1, sig);
 
     infinity();
