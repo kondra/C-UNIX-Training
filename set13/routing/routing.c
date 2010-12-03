@@ -22,6 +22,8 @@
  * 11/26/2010 11:09:01 PM: critical synchronisation bug fixed
 */
 
+#define e_critical(...) do { fprintf(stderr, __VA_ARGS__); exit(EXIT_FAILURE); } while (0)
+
 enum {
     MAX_PATH_LEN = 100,
     MSG_ERROR = -1,
@@ -140,8 +142,7 @@ Message *message_read(int fd, int *status)
         if (errno == EAGAIN) {
             return NULL;
         } else {
-            fprintf(stderr, "something bad has happened while reading message, terminating...\n");
-            exit(EXIT_FAILURE);
+            e_critical("something bad has happened while reading message, terminating...\n");
         }
     }
 
@@ -220,10 +221,8 @@ Pipe *pipes_create(int num)
     tmp = (Pipe*) malloc(sizeof (Pipe) * num);
     for (i = 0; i < num; i++) {
         st = pipe(tmp[i].fd);
-        if (st == -1) {
-            fprintf(stderr, "%d pipe failed\n", i);
-            exit(EXIT_FAILURE);
-        }
+        if (st == -1)
+            e_critical("%d pipe failed\n", i);
     }
 
     return tmp;
@@ -270,8 +269,7 @@ void wait_sem(int *sem)
             assert(st != -1);
             continue;
         }
-        fprintf(stderr, "error in sync pipe\n");
-        exit(EXIT_FAILURE);
+        e_critical("error in sync pipe\n");
     }
 }
 
@@ -283,10 +281,8 @@ void close_pipe(int *sem)
 
 int main(int argc, char **argv)
 {
-    if (argc < 3) {
-        fprintf(stderr, "wrong number of parameters\n");
-        exit(EXIT_FAILURE);
-    }
+    if (argc < 3)
+        e_critical("wrong number of parameters\n");
 
     GraphData *data;
     Pipe *red_pipe, **blue_pipe;
@@ -310,10 +306,8 @@ int main(int argc, char **argv)
     blue_pids = (pid_t*) malloc(sizeof (pid_t) * b);
 
     //sync pipes
-    if (pipe(sem)) {
-        fprintf(stderr, "first sync pipe failed\n");
-        exit(EXIT_FAILURE);
-    }
+    if (pipe(sem))
+        e_critical("first sync pipe failed\n");
 
     //blue processes
     for (i = 0; i < b; i++) {
@@ -424,8 +418,7 @@ int main(int argc, char **argv)
 
             exit(EXIT_SUCCESS);
         } else if (pid == -1) {
-            fprintf(stderr, "failed on %d's blue fork\n", i);
-            exit(EXIT_FAILURE);
+            e_critical("failed on %d's blue fork\n", i);
         }
 
         blue_pids[i] = pid;
@@ -453,11 +446,9 @@ int main(int argc, char **argv)
                 ;
 
             execlp(name, name + j + 1, num_buf, filename, NULL);
-            fprintf(stderr, "%d red process exec failed\n", i);
-            exit(EXIT_FAILURE);
+            e_critical("%d red process exec failed\n", i);
         } else if (pid == -1) {
-            fprintf(stderr, "%d red process fork failed\n", i);
-            exit(EXIT_FAILURE);
+            e_critical("%d red process fork failed\n", i);
         }
 
         red_pids[i] = pid;
@@ -467,10 +458,8 @@ int main(int argc, char **argv)
     pipes_close(red_pipe, r);
 
     //create monster pipe and monster process
-    if (pipe(monster_pipe) < 0) {
-        fprintf(stderr, "monster pipe failed\n");
-        exit(EXIT_FAILURE);
-    }
+    if (pipe(monster_pipe) < 0)
+        e_critical("monster pipe failed\n");
     if ((monster_pid = fork()) == 0) {
         int *pfd = monster_pipe;
         char *name = argv[2];
@@ -483,11 +472,9 @@ int main(int argc, char **argv)
             ;
 
         execlp(name, name + i + 1, NULL);
-        fprintf(stderr, "monster process exec failed\n");
-        exit(EXIT_FAILURE);
+        e_critical("monster process exec failed\n");
     } else if (monster_pid == -1) {
-        fprintf(stderr, "monster process forking failed\n");
-        exit(EXIT_FAILURE);
+        e_critical("monster process forking failed\n");
     }
     close(monster_pipe[0]);
 
@@ -502,7 +489,7 @@ int main(int argc, char **argv)
                 fail = 0;
         if (fail) {
             fprintf(stderr, "an error in blue process has occured, terminating...\n");
-            break; //kill everybody
+            goto END; //kill everybody
         }
     }
 
@@ -510,6 +497,7 @@ int main(int argc, char **argv)
     //and all red pipes to be read
     wait_sem(sem);
 
+END:
     //tell monster to kill our children
     st = write(monster_pipe[1], &b, sizeof (int));
     for (i = 0; i < b; i++) {
