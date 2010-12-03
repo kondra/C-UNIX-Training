@@ -167,7 +167,7 @@ Message *message_read(int fd, int *status)
 
 int message_check(GraphData *data, int cur, Message *msg)
 {
-    if (msg->len < 0 || (msg->len > 0 && (msg->node[0] > data->b || data->vmatrix[cur][msg->node[0] - 1] == 0))) {
+    if (msg->len < 0 || (msg->len > 0 && (msg->node[0] <= 0 || msg->node[0] > data->b || data->vmatrix[cur][msg->node[0] - 1] == 0))) {
         printf("E:\t%d\t%d\t%d\t%d\n", getpid(), cur + 1, msg->id, msg->node[0]);
         return MSG_ERROR;
     }
