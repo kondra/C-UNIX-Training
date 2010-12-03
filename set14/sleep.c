@@ -28,13 +28,14 @@ void mysleep(unsigned int seconds)
             break;
     }
 
-    alarm(save);
+    if (save - seconds > 0)
+        alarm(save - seconds);
     signal(SIGALRM, prev);
 }
 
 int main(void)
 {
-    alarm(2);
+    alarm(4);
     mysleep(2);
     printf("1\n");
     while(1)
