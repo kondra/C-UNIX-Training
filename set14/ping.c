@@ -49,12 +49,21 @@ void infinity(void) {
         pause();
 }
 
+pid_t create(int s, pid_t p)
+{
+    pid_t pid;
+    if ((pid = fork()) == 0) {
+        sig = s;
+        s_pid1 = p;
+        infinity();
+    }
+    return pid;
+}
+
 int main(void)
 {
     int i, st;
     int msg = 0;
-
-    pid_t pid;
 
     st = pipe(fd);
 
@@ -62,35 +71,10 @@ int main(void)
     signal(SIGUSR2, sig_handler);
 
     i = 0;
-    if ((pid = fork()) == 0) {
-        sig = SIGUSR1;
-        s_pid1 = getppid();
-        infinity();
-    }
-    g_pid[i++] = pid;
-
-    if ((pid = fork()) == 0) {
-        sig = SIGUSR2;
-        s_pid1 = getppid();
-        infinity();
-    }
-    g_pid[i++] = pid;
-
-    if ((pid = fork()) == 0) {
-        sig = SIGUSR1;
-        s_pid1 = g_pid[1];
-        infinity();
-    }
-    g_pid[i++] = pid;
-    s_pid1 = pid;
-
-    if ((pid = fork()) == 0) {
-        sig = SIGUSR1;
-        s_pid1 = g_pid[0];
-        infinity();
-    }
-    g_pid[i++] = pid;
-    s_pid2 = pid;
+    g_pid[i++] = create(SIGUSR1, getppid());
+    g_pid[i++] = create(SIGUSR2, getppid());
+    s_pid1 = g_pid[i++] = create(SIGUSR1, g_pid[1]);
+    s_pid2 = g_pid[i++] = create(SIGUSR1, g_pid[0]);
 
     signal(SIGINT, sig_handler);
 
