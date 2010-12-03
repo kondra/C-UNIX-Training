@@ -22,6 +22,14 @@
  * 11/26/2010 11:09:01 PM: critical synchronisation bug fixed
 */
 
+#define DEBUG
+
+#ifdef DEBUG
+#define debug(...) do { fprintf(stderr, "DEBUG (%d): ", getpid()); fprintf(stderr, __VA_ARGS__); } while (0)
+#else
+#define debug(...)
+#endif
+
 #define e_critical(...) do { fprintf(stderr, __VA_ARGS__); exit(EXIT_FAILURE); } while (0)
 
 enum {
