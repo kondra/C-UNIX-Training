@@ -381,7 +381,8 @@ int main(int argc, char **argv)
                         break;
                     } else if (s == -1) {
                         //eof in pipe, so red is dead, and we will not receive smth from this one
-                        st = read(sem[0], &mark, sizeof(int));
+                        while ((st = read(sem[0], &mark, sizeof(int))) != sizeof(int))
+                            ;
                         isdead[j] = 1;
                         s = 0;
                     }
@@ -409,7 +410,8 @@ int main(int argc, char **argv)
 
                 if (st == MSG_ERROR || st == MSG_END) {
                     //message is dead now
-                    st = read(sem[0], &mark, sizeof(int));
+                    while((st = read(sem[0], &mark, sizeof(int))) != sizeof(int))
+                        ;
                     message_destroy(msg);
                     continue;
                 }
