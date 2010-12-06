@@ -25,7 +25,7 @@
 #define DEBUG
 
 #ifdef DEBUG
-#define debug(...) do { fprintf(stderr, "DEBUG (%d): ", getpid()); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while (0)
+#define debug(...) do { fprintf(stderr, "DEBUG (%d): ", getpid()); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); fflush(stderr); } while (0)
 #else
 #define debug(...)
 #endif
@@ -259,28 +259,6 @@ Pipe **blue_pipe_create(GraphData *data)
     return bp;
 }
 
-void wait_sem(int *sem)
-{
-    int mark = 0;
-    int st;
-
-    set_nonblock(sem[0]);
-    while (1) {
-        usleep(100);
-        st = read(sem[0], &mark, sizeof(int));
-        if (st == 0)
-            return;
-        if (st < 0 && errno == EAGAIN)
-                return;
-        if (st == sizeof(int)) {
-            st = write(sem[1], &mark, sizeof(int));
-            assert(st != -1);
-            continue;
-        }
-        e_critical("error in sync pipe\n");
-    }
-}
-
 void close_pipe(int *sem)
 {
     close(sem[0]);
@@ -295,12 +273,15 @@ int main(int argc, char **argv)
     GraphData *data;
     Pipe *red_pipe, **blue_pipe;
 
-    int st, fail, i, j, r, b, **vmatrix;
+    int st, fail, i, j, r, b, **vmatrix, mark, red_balance, msg_balance;
     int sem[2], monster_pipe[2];
-    int mark = 0;
     pid_t *blue_pids;
     pid_t *red_pids;
     pid_t monster_pid, pid, rpid;
+
+    int mark_new_msg = 1;
+    int mark_dead_msg = -1;
+    int mark_dead_red = 0;
 
     data = data_read();
 
@@ -341,8 +322,6 @@ int main(int argc, char **argv)
                 close(red_pipe[j].fd[1]);
             }
             redp_num = k;
-            for (j = 0; j < redp_num; j++)
-                st = write(sem[1], &mark, sizeof(int));
 
             //copy pipes from which we read for faster access
             //and close them for writing, also close other pipes which we don't use in this process
@@ -381,8 +360,7 @@ int main(int argc, char **argv)
                         break;
                     } else if (s == -1) {
                         //eof in pipe, so red is dead, and we will not receive smth from this one
-                        while ((st = read(sem[0], &mark, sizeof(int))) != sizeof(int))
-                            ;
+                        st = write(sem[1], &mark_dead_red, sizeof(int));
                         isdead[j] = 1;
                         s = 0;
                     }
@@ -395,7 +373,7 @@ int main(int argc, char **argv)
                 } else {
                     //if we've received something from red pipe
                     //we have a new packet in network
-                    st = write(sem[1], &mark, sizeof(int));
+                    st = write(sem[1], &mark_new_msg, sizeof(int));
                 }
 
                 //try again
@@ -410,8 +388,7 @@ int main(int argc, char **argv)
 
                 if (st == MSG_ERROR || st == MSG_END) {
                     //message is dead now
-                    while((st = read(sem[0], &mark, sizeof(int))) != sizeof(int))
-                        ;
+                    st = write(sem[1], &mark_dead_msg, sizeof(int));
                     message_destroy(msg);
                     continue;
                 }
@@ -498,16 +475,31 @@ int main(int argc, char **argv)
             if (rpid == red_pids[j])
                 fail = 0;
         if (fail) {
-            fprintf(stderr, "an error in blue process has occured, terminating...\n");
-            goto END; //kill everybody
+            e_critical("an error in blue process has occured, terminating...");
         }
     }
 
     //wait all packets to reach their destination
     //and all red pipes to be read
-    wait_sem(sem);
+    red_balance = r;
+    msg_balance = 0;
 
-END:
+    while (red_balance || msg_balance) {
+        st = read(sem[0], &mark, sizeof(int));
+        if (st == 0)
+            break;
+        if (st == sizeof(int)) {
+            if (mark == 0)
+                red_balance--;
+            else if (mark == 1)
+                msg_balance++;
+            else if (mark == -1)
+                msg_balance--;
+            continue;
+        }
+        e_critical("error in sync pipe\n");
+    }
+
     //tell monster to kill our children
     st = write(monster_pipe[1], &b, sizeof(int));
     for (i = 0; i < b; i++) {
