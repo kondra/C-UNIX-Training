@@ -3,10 +3,11 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <limits.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 
-enum {INT_LEN = 32};
+enum {INT_LEN = CHAR_BIT * (sizeof(int) / sizeof(char))};
 
 volatile sig_atomic_t num, ind;
 
