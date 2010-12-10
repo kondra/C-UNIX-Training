@@ -46,6 +46,7 @@ typedef struct Message {
     int fd[2];
     int id, msg, len;
     int *node;
+    struct Message *next;
 } Message;
 
 typedef struct {
@@ -144,15 +145,27 @@ Message *message_read(int fd, int *status, Message *old)
             }
         }
 
+        debug("ID: %d", t);
+#ifdef DEBUG
+        if (t == 1 || t == 2) {
+            exit(0);
+        }
+#endif
+        
+        assert(st == sizeof(int));
+
         msg = (Message*) malloc(sizeof(Message));
         msg->id = t;
 
         set_block(fd);
 
-        st = read(fd, &msg->msg, sizeof(int));
-        st = read(fd, &msg->len, sizeof(int));
+        debug("READ");
+
+        while ((st = read(fd, &msg->msg, sizeof(int))) != sizeof(int));
+        while ((st = read(fd, &msg->len, sizeof(int))) != sizeof(int));
 
         msg->node = (int*) malloc(sizeof(int) * msg->len);
+        msg->next = NULL;
         msg->sv_r = 1;
         msg->sv_w = -1;
         msg->ch = 0;
@@ -161,8 +174,15 @@ Message *message_read(int fd, int *status, Message *old)
         msg->fd[1] = 0;
 
         if (msg->len > 0) {
-            st = read(fd, &msg->node[0], sizeof(int));
+            while ((st = read(fd, &msg->node[0], sizeof(int))) != sizeof(int));
+#ifdef DEBUG
+            if (msg->node[0] != 111 && msg->node[0] != 9999 && msg->node[0] != 1 && msg->node[0] != 2) {
+                debug("NODE0: %d", msg->node[0]);
+            }
+#endif
         }
+
+        debug("read:ok, %d | id: %d", msg->len, msg->id);
     } else {
         msg = old;
     }
@@ -174,14 +194,56 @@ Message *message_read(int fd, int *status, Message *old)
     for (i = msg->sv_r; i < msg->len; i++) {
         st = read(fd, &msg->node[i], sizeof(int));
         if (st < 0 && errno == EAGAIN) {
-            debug("fail %d: read", msg->id);
             msg->sv_r = i;
             return msg;
         }
+#ifdef DEBUG
+        if (msg->node[i] != 111 && msg->node[i] != 9999 && msg->node[i] != 1 && msg->node[i] != 2) {
+//            debug("HAD %d SVR", msg->sv_r);
+            debug("OLO: %d", msg->node[i]);
+        }
+#endif
     }
     msg->sv_r = msg->len;
 
     return msg;
+}
+
+int message_send(int fd, Message *msg)
+{
+    int i, st;
+
+    if (msg->sv_w == -1) {
+        debug("WRITE");
+
+        set_block(fd);
+
+        while ((st = write(fd, &msg->id, sizeof(int))) != sizeof(int));
+        while ((st = write(fd, &msg->msg, sizeof(int))) != sizeof(int));
+        msg->len--;
+        while ((st = write(fd, &msg->len, sizeof(int))) != sizeof(int));
+        msg->len++;
+        msg->sv_w = 1;
+        msg->fd[1] = fd;
+        debug("write:ok - %d", fd);
+    }
+
+    set_nonblock(fd);
+
+    for (i = msg->sv_w; i < msg->sv_r; i++) {
+        st = write(fd, &msg->node[i], sizeof(int));
+        if (st == -1 && errno == EAGAIN) {
+            msg->sv_w = i;
+            return -1;
+        }
+    }
+
+    msg->sv_w = i;
+    if (i != msg->len) {
+        return -1;
+    }
+    debug("OK");
+    return 0;
 }
 
 int message_check(GraphData *data, int cur, Message *msg)
@@ -197,36 +259,6 @@ int message_check(GraphData *data, int cur, Message *msg)
     }
     printf("T:\t%d\t%d\t%d\t%d\n", getpid(), cur + 1, msg->id, msg->node[0]);
     return MSG_OK;
-}
-
-int message_send(int fd, Message *msg)
-{
-    int i, st;
-
-    if (msg->sv_w == -1) {
-        st = write(fd, &msg->id, sizeof(int));
-        st = write(fd, &msg->msg, sizeof(int));
-        msg->len--;
-        st = write(fd, &msg->len, sizeof(int));
-        msg->len++;
-        msg->sv_w = 1;
-        msg->fd[1] = fd;
-    }
-
-    for (i = msg->sv_w; i < msg->sv_r; i++) {
-        st = write(fd, &msg->node[i], sizeof(int));
-        if (st == -1 && errno == EAGAIN) {
-            msg->sv_w = i;
-            debug("fail %d: write", msg->id);
-            return -1;
-        }
-    }
-    msg->sv_w = i;
-    if (i != msg->len) {
-        debug("i!=len");
-        return -1;
-    }
-    return 0;
 }
 
 void message_destroy(Message *msg)
@@ -405,8 +437,10 @@ int main(int argc, char **argv)
                             if (msg->len > msg->sv_r) {
                                 r_msg[j] = msg;
                                 r_num = j;
+                                msg = NULL;
                             } else {
                                 r_msg[j] = NULL;
+                                debug("full - %d | id: %d", msg->len, msg->id);
                             }
                             break;
                         }
@@ -414,13 +448,6 @@ int main(int argc, char **argv)
 
                 //try again
                 if (msg == NULL) {
-                    for (j = 0; msg == NULL && j < data->read_num[i]; j++) {
-                        if (r_msg[j] != NULL) {
-                            msg = r_msg[j];
-                            r_num = j;
-                        }
-                    }
-
                     for (j = 0; msg == NULL && j < data->write_num[i]; j++)
                         if (w_msg[j] != NULL)
                             msg = w_msg[j];
@@ -450,14 +477,29 @@ int main(int argc, char **argv)
                             break;
                         }
                     }
+
+                    j = msg->num_w;
+                    if (w_msg[j] != NULL) {
+                        Message *cur = w_msg[j];
+                        while(cur->next != NULL)
+                            cur = cur->next;
+                        cur->next = msg;
+                        msg = w_msg[j];
+                    } else {
+                        w_msg[j] = msg;
+                    }
                 }
+
+#ifdef DEBUG
+                if (msg->id == 1 || msg->id == 2) {
+                    debug("FUUU");
+                }
+#endif
 
                 st = message_send(msg->fd[1], msg);
                 if (st == 0) {
+                    w_msg[msg->num_w] = w_msg[msg->num_w]->next;
                     message_destroy(msg);
-                    w_msg[msg->num_w] = NULL;
-                } else {
-                    w_msg[msg->num_w] = msg;
                 }
             }
 
