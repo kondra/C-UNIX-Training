@@ -8,21 +8,7 @@
 #include <stdlib.h>
 #include <assert.h>
 
-//v0.1.3
-
-/*
- * Changelog:
- * 11/15/2010 08:15:37 PM: sync with global pipe
- * 11/16/2010 10:29:25 PM: minor bugfixes
- * 11/20/2010 02:57:51 PM: blocking read/write in global pipe in blue nodes
- * 11/22/2010 05:01:35 PM: colors, blocking read/write
- * 11/22/2010 05:32:51 PM: critical bug fixed (some red pipes were not closed)
- * 11/22/2010 05:44:55 PM: second sync pipe
- * 11/22/2010 06:32:41 PM: colours removed
- * 11/26/2010 11:09:01 PM: critical synchronisation bug fixed
-*/
-
-#define DEBUG
+//#define DEBUG
 
 #ifdef DEBUG
 #define debug(...) do { fprintf(stderr, "DEBUG (%d): ", getpid()); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); fflush(stderr); } while (0)
@@ -54,7 +40,10 @@ typedef struct {
     struct red_edge *red;
 } GraphData;
 
-typedef struct {
+typedef struct Message {
+    int ch, num_w;
+    int sv_w, sv_r;
+    int fd[2];
     int id, msg, len;
     int *node;
 } Message;
@@ -130,51 +119,74 @@ GraphData *data_read(void)
     return data;
 }
 
-Message *message_read(int fd, int *status)
+Message *message_read(int fd, int *status, Message *old)
 {
     Message *msg = NULL;
 
     int st, t, i;
 
-    set_nonblock(fd);
+    if (old == NULL) {
+        set_nonblock(fd);
 
-    st = read(fd, &t, sizeof(int));
+        st = read(fd, &t, sizeof(int));
 
-    if (st == 0) {
-        if (status)
-            *status = -1;
-        return NULL;
+        if (st == 0) {
+            if (status)
+                *status = -1;
+            return NULL;
+        }
+
+        if (st < 0) {
+            if (errno == EAGAIN) {
+                return NULL;
+            } else {
+                e_critical("something bad has happened while reading message, terminating...\n");
+            }
+        }
+
+        msg = (Message*) malloc(sizeof(Message));
+        msg->id = t;
+
+        set_block(fd);
+
+        st = read(fd, &msg->msg, sizeof(int));
+        st = read(fd, &msg->len, sizeof(int));
+
+        msg->node = (int*) malloc(sizeof(int) * msg->len);
+        msg->sv_r = 1;
+        msg->sv_w = -1;
+        msg->ch = 0;
+
+        msg->fd[0] = fd;
+        msg->fd[1] = 0;
+
+        if (msg->len > 0) {
+            st = read(fd, &msg->node[0], sizeof(int));
+        }
+    } else {
+        msg = old;
     }
 
-    if (st < 0) {
-        if (errno == EAGAIN) {
-            return NULL;
-        } else {
-            e_critical("something bad has happened while reading message, terminating...\n");
+    if (status == NULL) {
+        set_nonblock(fd);
+    }
+
+    for (i = msg->sv_r; i < msg->len; i++) {
+        st = read(fd, &msg->node[i], sizeof(int));
+        if (st < 0 && errno == EAGAIN) {
+            debug("fail %d: read", msg->id);
+            msg->sv_r = i;
+            return msg;
         }
     }
-
-    msg = (Message*) malloc(sizeof(Message));
-    msg->id = t;
-
-    set_block(fd);
-
-    st = read(fd, &msg->msg, sizeof(int));
-    assert(st != -1);
-    st = read(fd, &msg->len, sizeof(int));
-    assert(st != -1);
-
-    msg->node = (int*) malloc(sizeof(int) * msg->len);
-    for (i = 0; i < msg->len; i++) {
-        st = read(fd, &msg->node[i], sizeof(int));
-        assert(st != -1);
-    }
+    msg->sv_r = msg->len;
 
     return msg;
 }
 
 int message_check(GraphData *data, int cur, Message *msg)
 {
+    msg->ch = 1;
     if (msg->len < 0 || (msg->len > 0 && (msg->node[0] <= 0 || msg->node[0] > data->b || data->vmatrix[cur][msg->node[0] - 1] == 0))) {
         printf("E:\t%d\t%d\t%d\t%d\n", getpid(), cur + 1, msg->id, msg->node[0]);
         return MSG_ERROR;
@@ -187,22 +199,34 @@ int message_check(GraphData *data, int cur, Message *msg)
     return MSG_OK;
 }
 
-void message_send(int fd, Message *msg)
+int message_send(int fd, Message *msg)
 {
     int i, st;
 
-    msg->len--;
-    st = write(fd, &msg->id, sizeof(int));
-    assert(st != -1);
-    st = write(fd, &msg->msg, sizeof(int));
-    assert(st != -1);
-    st = write(fd, &msg->len, sizeof(int));
-    assert(st != -1);
-
-    for (i = 1; i <= msg->len; i++) {
-        st = write(fd, &msg->node[i], sizeof(int));
-        assert(st != -1);
+    if (msg->sv_w == -1) {
+        st = write(fd, &msg->id, sizeof(int));
+        st = write(fd, &msg->msg, sizeof(int));
+        msg->len--;
+        st = write(fd, &msg->len, sizeof(int));
+        msg->len++;
+        msg->sv_w = 1;
+        msg->fd[1] = fd;
     }
+
+    for (i = msg->sv_w; i < msg->sv_r; i++) {
+        st = write(fd, &msg->node[i], sizeof(int));
+        if (st == -1 && errno == EAGAIN) {
+            msg->sv_w = i;
+            debug("fail %d: write", msg->id);
+            return -1;
+        }
+    }
+    msg->sv_w = i;
+    if (i != msg->len) {
+        debug("i!=len");
+        return -1;
+    }
+    return 0;
 }
 
 void message_destroy(Message *msg)
@@ -279,9 +303,9 @@ int main(int argc, char **argv)
     pid_t *red_pids;
     pid_t monster_pid, pid, rpid;
 
-    int mark_new_msg = 1;
-    int mark_dead_msg = -1;
-    int mark_dead_red = 0;
+    const int mark_new_msg = 1;
+    const int mark_dead_msg = -1;
+    const int mark_dead_red = 0;
 
     data = data_read();
 
@@ -302,10 +326,12 @@ int main(int argc, char **argv)
     for (i = 0; i < b; i++) {
         if ((pid = fork()) == 0) {
             Message *msg;
+            Message **r_msg, **w_msg;
             Pipe *read_pipe;
 
             int *redp, redp_num, *isdead;
             int lock, l, k, s;
+            int r_num;
 
             lock = 0;
             redp = (int*) malloc(sizeof(int) * r);
@@ -347,16 +373,23 @@ int main(int argc, char **argv)
                 }
             }
 
+            r_msg = (Message**) calloc(data->read_num[i], sizeof(Message*));
+            w_msg = (Message**) calloc(data->write_num[i], sizeof(Message*));
+
             //don't read from pipes in which we write
             for (j = 0; j < data->write_num[i]; j++)
                 close(blue_pipe[i][j].fd[0]);
 
             //main loop
             while (1) {
+                r_num = -1;
                 msg = NULL;
                 //try to read from red pipes
                 for (s = 0, j = 0; j < redp_num; j++)
-                    if (!isdead[j] && (msg = message_read(redp[j], &s)) != NULL) {
+                    if (!isdead[j] && (msg = message_read(redp[j], &s, NULL)) != NULL) {
+                        //if we've received something from red pipe
+                        //we have a new packet in network
+                        st = write(sem[1], &mark_new_msg, sizeof(int));
                         break;
                     } else if (s == -1) {
                         //eof in pipe, so red is dead, and we will not receive smth from this one
@@ -368,38 +401,63 @@ int main(int argc, char **argv)
                 //try to read from blue pipes if nothing was read from red ones
                 if (msg == NULL) {
                     for (j = 0; j < data->read_num[i]; j++)
-                        if ((msg = message_read(read_pipe[j].fd[0], NULL)) != NULL)
+                        if ((msg = message_read(read_pipe[j].fd[0], NULL, r_msg[j])) != NULL) {
+                            if (msg->len > msg->sv_r) {
+                                r_msg[j] = msg;
+                                r_num = j;
+                            } else {
+                                r_msg[j] = NULL;
+                            }
                             break;
-                } else {
-                    //if we've received something from red pipe
-                    //we have a new packet in network
-                    st = write(sem[1], &mark_new_msg, sizeof(int));
+                        }
                 }
 
                 //try again
                 if (msg == NULL) {
-                    usleep(100);
-                    continue;
+                    for (j = 0; msg == NULL && j < data->read_num[i]; j++) {
+                        if (r_msg[j] != NULL) {
+                            msg = r_msg[j];
+                            r_num = j;
+                        }
+                    }
+
+                    for (j = 0; msg == NULL && j < data->write_num[i]; j++)
+                        if (w_msg[j] != NULL)
+                            msg = w_msg[j];
+
+                    if (msg == NULL) {
+                        usleep(100);
+                        continue;
+                    }
                 }
 
                 //check the message
-                st = message_check(data, i, msg);
-                fflush(stdout);
-
-                if (st == MSG_ERROR || st == MSG_END) {
-                    //message is dead now
-                    st = write(sem[1], &mark_dead_msg, sizeof(int));
-                    message_destroy(msg);
-                    continue;
-                }
-                //st == MSG_OK
-                //send message
-                for (j = 0; j < data->write_num[i]; j++) {
-                    if (blue_pipe[i][j].to == msg->node[0] - 1) {
-                        message_send(blue_pipe[i][j].fd[1], msg);
+                if (!msg->ch) {
+                    st = message_check(data, i, msg);
+                    fflush(stdout);
+                    if (st == MSG_ERROR || st == MSG_END) {
+                        //message is dead now
+                        st = write(sem[1], &mark_dead_msg, sizeof(int));
                         message_destroy(msg);
-                        break;
+                        continue;
                     }
+                    //st == MSG_OK
+                    //send message
+                    for (j = 0; j < data->write_num[i]; j++) {
+                        if (blue_pipe[i][j].to == msg->node[0] - 1) {
+                            msg->num_w = j;
+                            msg->fd[1] = blue_pipe[i][j].fd[1];
+                            break;
+                        }
+                    }
+                }
+
+                st = message_send(msg->fd[1], msg);
+                if (st == 0) {
+                    message_destroy(msg);
+                    w_msg[msg->num_w] = NULL;
+                } else {
+                    w_msg[msg->num_w] = msg;
                 }
             }
 
