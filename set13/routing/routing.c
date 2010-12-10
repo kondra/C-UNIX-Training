@@ -146,11 +146,6 @@ Message *message_read(int fd, int *status, Message *old)
         }
 
         debug("ID: %d", t);
-#ifdef DEBUG
-        if (t == 1 || t == 2) {
-            exit(0);
-        }
-#endif
         
         assert(st == sizeof(int));
 
@@ -175,11 +170,6 @@ Message *message_read(int fd, int *status, Message *old)
 
         if (msg->len > 0) {
             while ((st = read(fd, &msg->node[0], sizeof(int))) != sizeof(int));
-#ifdef DEBUG
-            if (msg->node[0] != 111 && msg->node[0] != 9999 && msg->node[0] != 1 && msg->node[0] != 2) {
-                debug("NODE0: %d", msg->node[0]);
-            }
-#endif
         }
 
         debug("read:ok, %d | id: %d", msg->len, msg->id);
@@ -197,12 +187,6 @@ Message *message_read(int fd, int *status, Message *old)
             msg->sv_r = i;
             return msg;
         }
-#ifdef DEBUG
-        if (msg->node[i] != 111 && msg->node[i] != 9999 && msg->node[i] != 1 && msg->node[i] != 2) {
-//            debug("HAD %d SVR", msg->sv_r);
-            debug("OLO: %d", msg->node[i]);
-        }
-#endif
     }
     msg->sv_r = msg->len;
 
@@ -489,12 +473,6 @@ int main(int argc, char **argv)
                         w_msg[j] = msg;
                     }
                 }
-
-#ifdef DEBUG
-                if (msg->id == 1 || msg->id == 2) {
-                    debug("FUUU");
-                }
-#endif
 
                 st = message_send(msg->fd[1], msg);
                 if (st == 0) {
