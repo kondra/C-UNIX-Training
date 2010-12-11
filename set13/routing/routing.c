@@ -16,7 +16,23 @@
 #define debug(...)
 #endif
 
-#define e_critical(...) do { fprintf(stderr, __VA_ARGS__); exit(EXIT_FAILURE); } while (0)
+#define err_quit(...) \
+    do { \
+        fflush(stdout); \
+        fprintf(stderr, __VA_ARGS__); \
+        fprintf(stderr, "\n"); \
+        fflush(NULL); \
+        exit(EXIT_FAILURE); \
+    } while (0)
+
+#define err_sys(...) \
+    do { \
+        fflush(stdout); \
+        fprintf(stderr, __VA_ARGS__); \
+        fprintf(stderr, ": %s\n", strerror(errno)); \
+        fflush(NULL); \
+        exit(EXIT_FAILURE); \
+    } while (0)
 
 enum {
     MAX_PATH_LEN = 100,
@@ -141,7 +157,7 @@ Message *message_read(int fd, int *status, Message *old)
             if (errno == EAGAIN) {
                 return NULL;
             } else {
-                e_critical("something bad has happened while reading message, terminating...\n");
+                err_sys("message read");
             }
         }
 
@@ -270,7 +286,7 @@ Pipe *pipes_create(int num)
     for (i = 0; i < num; i++) {
         st = pipe(tmp[i].fd);
         if (st == -1)
-            e_critical("%d pipe failed\n", i);
+            err_sys("%d pipe failed", i);
     }
 
     return tmp;
@@ -308,7 +324,7 @@ void close_pipe(int *sem)
 int main(int argc, char **argv)
 {
     if (argc < 3)
-        e_critical("wrong number of parameters\n");
+        err_quit("wrong number of parameters");
 
     GraphData *data;
     Pipe *red_pipe, **blue_pipe;
@@ -336,7 +352,7 @@ int main(int argc, char **argv)
 
     //sync pipes
     if (pipe(sem))
-        e_critical("first sync pipe failed\n");
+        err_sys("sync pipe failed");
 
     //blue processes
     for (i = 0; i < b; i++) {
@@ -483,7 +499,7 @@ int main(int argc, char **argv)
 
             exit(EXIT_SUCCESS);
         } else if (pid == -1) {
-            e_critical("failed on %d's blue fork\n", i);
+            err_sys("failed on %d's blue fork", i);
         }
 
         blue_pids[i] = pid;
@@ -511,9 +527,9 @@ int main(int argc, char **argv)
                 ;
 
             execlp(name, name + j + 1, num_buf, filename, NULL);
-            e_critical("%d red process exec failed\n", i);
+            err_sys("%d red process exec failed", i);
         } else if (pid == -1) {
-            e_critical("%d red process fork failed\n", i);
+            err_sys("%d red process fork failed", i);
         }
 
         red_pids[i] = pid;
@@ -524,7 +540,7 @@ int main(int argc, char **argv)
 
     //create monster pipe and monster process
     if (pipe(monster_pipe) < 0)
-        e_critical("monster pipe failed\n");
+        err_sys("monster pipe failed");
     if ((monster_pid = fork()) == 0) {
         int *pfd = monster_pipe;
         char *name = argv[2];
@@ -537,9 +553,9 @@ int main(int argc, char **argv)
             ;
 
         execlp(name, name + i + 1, NULL);
-        e_critical("monster process exec failed\n");
+        err_sys("monster process exec failed");
     } else if (monster_pid == -1) {
-        e_critical("monster process forking failed\n");
+        err_sys("monster process forking failed");
     }
     close(monster_pipe[0]);
 
@@ -553,7 +569,7 @@ int main(int argc, char **argv)
             if (rpid == red_pids[j])
                 fail = 0;
         if (fail) {
-            e_critical("an error in blue process has occured, terminating...");
+            err_quit("an error in blue process has occured, terminating...");
         }
     }
 
@@ -575,7 +591,7 @@ int main(int argc, char **argv)
                 msg_balance--;
             continue;
         }
-        e_critical("error in sync pipe\n");
+        err_sys("error in sync pipe");
     }
 
     //tell monster to kill our children
