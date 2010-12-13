@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/param.h>
 #include <stdlib.h>
 #include <assert.h>
 
@@ -35,7 +36,6 @@
     } while (0)
 
 enum {
-    MAX_PATH_LEN = 100,
     MSG_ERROR = -1,
     MSG_END = 1,
     MSG_OK = 0,
@@ -94,7 +94,7 @@ GraphData *data_read(void)
 
     int st, i, len;
     int **vmatrix, v1, v2;
-    char buf[MAX_PATH_LEN], *ch;
+    char buf[MAXPATHLEN], *ch;
 
     data = (GraphData*) malloc(sizeof(GraphData));
     assert(data != NULL);
@@ -116,7 +116,7 @@ GraphData *data_read(void)
         st = scanf("%d", &data->red[i].node);
         data->red[i].node--;
 
-        ch = fgets(buf, MAX_PATH_LEN, stdin);
+        ch = fgets(buf, MAXPATHLEN, stdin);
         len = strlen(buf);
         data->red[i].filename = (char*) malloc(sizeof(char) * (len - 1));
         buf[len - 1] = '\0';
