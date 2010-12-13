@@ -39,7 +39,6 @@ enum {
     MSG_ERROR = -1,
     MSG_END = 1,
     MSG_OK = 0,
-    MSG_OFFSET = 3,
 };
 
 struct red_edge {
