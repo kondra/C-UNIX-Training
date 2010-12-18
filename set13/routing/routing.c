@@ -5,24 +5,11 @@
 #include <sys/types.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/param.h>
 #include <stdlib.h>
 #include <assert.h>
 
-//v0.1.3
-
-/*
- * Changelog:
- * 11/15/2010 08:15:37 PM: sync with global pipe
- * 11/16/2010 10:29:25 PM: minor bugfixes
- * 11/20/2010 02:57:51 PM: blocking read/write in global pipe in blue nodes
- * 11/22/2010 05:01:35 PM: colors, blocking read/write
- * 11/22/2010 05:32:51 PM: critical bug fixed (some red pipes were not closed)
- * 11/22/2010 05:44:55 PM: second sync pipe
- * 11/22/2010 06:32:41 PM: colours removed
- * 11/26/2010 11:09:01 PM: critical synchronisation bug fixed
-*/
-
-#define DEBUG
+//#define DEBUG
 
 #ifdef DEBUG
 #define debug(...) do { fprintf(stderr, "DEBUG (%d): ", getpid()); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); fflush(stderr); } while (0)
@@ -30,14 +17,28 @@
 #define debug(...)
 #endif
 
-#define e_critical(...) do { fprintf(stderr, __VA_ARGS__); exit(EXIT_FAILURE); } while (0)
+#define err_quit(...) \
+    do { \
+        fflush(stdout); \
+        fprintf(stderr, __VA_ARGS__); \
+        fprintf(stderr, "\n"); \
+        fflush(NULL); \
+        exit(EXIT_FAILURE); \
+    } while (0)
+
+#define err_sys(...) \
+    do { \
+        fflush(stdout); \
+        fprintf(stderr, __VA_ARGS__); \
+        fprintf(stderr, ": %s\n", strerror(errno)); \
+        fflush(NULL); \
+        exit(EXIT_FAILURE); \
+    } while (0)
 
 enum {
-    MAX_PATH_LEN = 100,
     MSG_ERROR = -1,
     MSG_END = 1,
     MSG_OK = 0,
-    MSG_OFFSET = 3,
 };
 
 struct red_edge {
@@ -54,9 +55,13 @@ typedef struct {
     struct red_edge *red;
 } GraphData;
 
-typedef struct {
+typedef struct Message {
+    int ch, num_w;
+    int sv_w, sv_r;
+    int fd[2];
     int id, msg, len;
     int *node;
+    struct Message *next;
 } Message;
 
 typedef struct {
@@ -88,7 +93,7 @@ GraphData *data_read(void)
 
     int st, i, len;
     int **vmatrix, v1, v2;
-    char buf[MAX_PATH_LEN], *ch;
+    char buf[MAXPATHLEN], *ch;
 
     data = (GraphData*) malloc(sizeof(GraphData));
     assert(data != NULL);
@@ -110,7 +115,7 @@ GraphData *data_read(void)
         st = scanf("%d", &data->red[i].node);
         data->red[i].node--;
 
-        ch = fgets(buf, MAX_PATH_LEN, stdin);
+        ch = fgets(buf, MAXPATHLEN, stdin);
         len = strlen(buf);
         data->red[i].filename = (char*) malloc(sizeof(char) * (len - 1));
         buf[len - 1] = '\0';
@@ -130,51 +135,119 @@ GraphData *data_read(void)
     return data;
 }
 
-Message *message_read(int fd, int *status)
+Message *message_read(int fd, int *status, Message *old)
 {
     Message *msg = NULL;
 
     int st, t, i;
 
-    set_nonblock(fd);
+    if (old == NULL) {
+        set_nonblock(fd);
 
-    st = read(fd, &t, sizeof(int));
+        st = read(fd, &t, sizeof(int));
 
-    if (st == 0) {
-        if (status)
-            *status = -1;
-        return NULL;
+        if (st == 0) {
+            if (status)
+                *status = -1;
+            return NULL;
+        }
+
+        if (st < 0) {
+            if (errno == EAGAIN) {
+                return NULL;
+            } else {
+                err_sys("message read");
+            }
+        }
+
+        debug("ID: %d", t);
+        
+        assert(st == sizeof(int));
+
+        msg = (Message*) malloc(sizeof(Message));
+        msg->id = t;
+
+        set_block(fd);
+
+        debug("READ");
+
+        while ((st = read(fd, &msg->msg, sizeof(int))) != sizeof(int));
+        while ((st = read(fd, &msg->len, sizeof(int))) != sizeof(int));
+
+        msg->node = (int*) malloc(sizeof(int) * msg->len);
+        msg->next = NULL;
+        msg->sv_r = 1;
+        msg->sv_w = -1;
+        msg->ch = 0;
+
+        msg->fd[0] = fd;
+        msg->fd[1] = 0;
+
+        if (msg->len > 0) {
+            while ((st = read(fd, &msg->node[0], sizeof(int))) != sizeof(int));
+        }
+
+        debug("read:ok, %d | id: %d", msg->len, msg->id);
+    } else {
+        msg = old;
     }
 
-    if (st < 0) {
-        if (errno == EAGAIN) {
-            return NULL;
-        } else {
-            e_critical("something bad has happened while reading message, terminating...\n");
+    if (status == NULL) {
+        set_nonblock(fd);
+    }
+
+    for (i = msg->sv_r; i < msg->len; i++) {
+        st = read(fd, &msg->node[i], sizeof(int));
+        if (st < 0 && errno == EAGAIN) {
+            msg->sv_r = i;
+            return msg;
         }
     }
-
-    msg = (Message*) malloc(sizeof(Message));
-    msg->id = t;
-
-    set_block(fd);
-
-    st = read(fd, &msg->msg, sizeof(int));
-    assert(st != -1);
-    st = read(fd, &msg->len, sizeof(int));
-    assert(st != -1);
-
-    msg->node = (int*) malloc(sizeof(int) * msg->len);
-    for (i = 0; i < msg->len; i++) {
-        st = read(fd, &msg->node[i], sizeof(int));
-        assert(st != -1);
-    }
+    msg->sv_r = msg->len;
 
     return msg;
 }
 
+int message_send(int fd, Message *msg)
+{
+    int i, st;
+
+    if (msg->sv_w == -1) {
+        debug("WRITE");
+
+        set_block(fd);
+
+        while ((st = write(fd, &msg->id, sizeof(int))) != sizeof(int));
+        while ((st = write(fd, &msg->msg, sizeof(int))) != sizeof(int));
+        msg->len--;
+        while ((st = write(fd, &msg->len, sizeof(int))) != sizeof(int));
+        msg->len++;
+        msg->sv_w = 1;
+        msg->fd[1] = fd;
+        debug("write:ok - %d", fd);
+    }
+
+    set_nonblock(fd);
+
+    for (i = msg->sv_w; i < msg->sv_r; i++) {
+        st = write(fd, &msg->node[i], sizeof(int));
+        if (st == -1 && errno == EAGAIN) {
+            msg->sv_w = i;
+            return -1;
+        }
+    }
+
+    msg->sv_w = i;
+    if (i != msg->len) {
+        return -1;
+    }
+    debug("OK");
+    return 0;
+}
+
 int message_check(GraphData *data, int cur, Message *msg)
 {
+    msg->ch = 1;
     if (msg->len < 0 || (msg->len > 0 && (msg->node[0] <= 0 || msg->node[0] > data->b || data->vmatrix[cur][msg->node[0] - 1] == 0))) {
         printf("E:\t%d\t%d\t%d\t%d\n", getpid(), cur + 1, msg->id, msg->node[0]);
         return MSG_ERROR;
@@ -185,24 +258,6 @@ int message_check(GraphData *data, int cur, Message *msg)
     }
     printf("T:\t%d\t%d\t%d\t%d\n", getpid(), cur + 1, msg->id, msg->node[0]);
     return MSG_OK;
-}
-
-void message_send(int fd, Message *msg)
-{
-    int i, st;
-
-    msg->len--;
-    st = write(fd, &msg->id, sizeof(int));
-    assert(st != -1);
-    st = write(fd, &msg->msg, sizeof(int));
-    assert(st != -1);
-    st = write(fd, &msg->len, sizeof(int));
-    assert(st != -1);
-
-    for (i = 1; i <= msg->len; i++) {
-        st = write(fd, &msg->node[i], sizeof(int));
-        assert(st != -1);
-    }
 }
 
 void message_destroy(Message *msg)
@@ -230,7 +285,7 @@ Pipe *pipes_create(int num)
     for (i = 0; i < num; i++) {
         st = pipe(tmp[i].fd);
         if (st == -1)
-            e_critical("%d pipe failed\n", i);
+            err_sys("%d pipe failed", i);
     }
 
     return tmp;
@@ -268,7 +323,7 @@ void close_pipe(int *sem)
 int main(int argc, char **argv)
 {
     if (argc < 3)
-        e_critical("wrong number of parameters\n");
+        err_quit("wrong number of parameters");
 
     GraphData *data;
     Pipe *red_pipe, **blue_pipe;
@@ -279,9 +334,9 @@ int main(int argc, char **argv)
     pid_t *red_pids;
     pid_t monster_pid, pid, rpid;
 
-    int mark_new_msg = 1;
-    int mark_dead_msg = -1;
-    int mark_dead_red = 0;
+    const int mark_new_msg = 1;
+    const int mark_dead_msg = -1;
+    const int mark_dead_red = 0;
 
     data = data_read();
 
@@ -296,16 +351,18 @@ int main(int argc, char **argv)
 
     //sync pipes
     if (pipe(sem))
-        e_critical("first sync pipe failed\n");
+        err_sys("sync pipe failed");
 
     //blue processes
     for (i = 0; i < b; i++) {
         if ((pid = fork()) == 0) {
             Message *msg;
+            Message **r_msg, **w_msg;
             Pipe *read_pipe;
 
             int *redp, redp_num, *isdead;
             int lock, l, k, s;
+            int r_num;
 
             lock = 0;
             redp = (int*) malloc(sizeof(int) * r);
@@ -347,16 +404,23 @@ int main(int argc, char **argv)
                 }
             }
 
+            r_msg = (Message**) calloc(data->read_num[i], sizeof(Message*));
+            w_msg = (Message**) calloc(data->write_num[i], sizeof(Message*));
+
             //don't read from pipes in which we write
             for (j = 0; j < data->write_num[i]; j++)
                 close(blue_pipe[i][j].fd[0]);
 
             //main loop
             while (1) {
+                r_num = -1;
                 msg = NULL;
                 //try to read from red pipes
                 for (s = 0, j = 0; j < redp_num; j++)
-                    if (!isdead[j] && (msg = message_read(redp[j], &s)) != NULL) {
+                    if (!isdead[j] && (msg = message_read(redp[j], &s, NULL)) != NULL) {
+                        //if we've received something from red pipe
+                        //we have a new packet in network
+                        st = write(sem[1], &mark_new_msg, sizeof(int));
                         break;
                     } else if (s == -1) {
                         //eof in pipe, so red is dead, and we will not receive smth from this one
@@ -368,44 +432,73 @@ int main(int argc, char **argv)
                 //try to read from blue pipes if nothing was read from red ones
                 if (msg == NULL) {
                     for (j = 0; j < data->read_num[i]; j++)
-                        if ((msg = message_read(read_pipe[j].fd[0], NULL)) != NULL)
+                        if ((msg = message_read(read_pipe[j].fd[0], NULL, r_msg[j])) != NULL) {
+                            if (msg->len > msg->sv_r) {
+                                r_msg[j] = msg;
+                                r_num = j;
+                                msg = NULL;
+                            } else {
+                                r_msg[j] = NULL;
+                                debug("full - %d | id: %d", msg->len, msg->id);
+                            }
                             break;
-                } else {
-                    //if we've received something from red pipe
-                    //we have a new packet in network
-                    st = write(sem[1], &mark_new_msg, sizeof(int));
+                        }
                 }
 
                 //try again
                 if (msg == NULL) {
-                    usleep(100);
-                    continue;
+                    for (j = 0; msg == NULL && j < data->write_num[i]; j++)
+                        if (w_msg[j] != NULL)
+                            msg = w_msg[j];
+
+                    if (msg == NULL) {
+                        usleep(100);
+                        continue;
+                    }
                 }
 
                 //check the message
-                st = message_check(data, i, msg);
-                fflush(stdout);
-
-                if (st == MSG_ERROR || st == MSG_END) {
-                    //message is dead now
-                    st = write(sem[1], &mark_dead_msg, sizeof(int));
-                    message_destroy(msg);
-                    continue;
-                }
-                //st == MSG_OK
-                //send message
-                for (j = 0; j < data->write_num[i]; j++) {
-                    if (blue_pipe[i][j].to == msg->node[0] - 1) {
-                        message_send(blue_pipe[i][j].fd[1], msg);
+                if (!msg->ch) {
+                    st = message_check(data, i, msg);
+                    fflush(stdout);
+                    if (st == MSG_ERROR || st == MSG_END) {
+                        //message is dead now
+                        st = write(sem[1], &mark_dead_msg, sizeof(int));
                         message_destroy(msg);
-                        break;
+                        continue;
                     }
+                    //st == MSG_OK
+                    //send message
+                    for (j = 0; j < data->write_num[i]; j++) {
+                        if (blue_pipe[i][j].to == msg->node[0] - 1) {
+                            msg->num_w = j;
+                            msg->fd[1] = blue_pipe[i][j].fd[1];
+                            break;
+                        }
+                    }
+
+                    j = msg->num_w;
+                    if (w_msg[j] != NULL) {
+                        Message *cur = w_msg[j];
+                        while(cur->next != NULL)
+                            cur = cur->next;
+                        cur->next = msg;
+                        msg = w_msg[j];
+                    } else {
+                        w_msg[j] = msg;
+                    }
+                }
+
+                st = message_send(msg->fd[1], msg);
+                if (st == 0) {
+                    w_msg[msg->num_w] = w_msg[msg->num_w]->next;
+                    message_destroy(msg);
                 }
             }
 
             exit(EXIT_SUCCESS);
         } else if (pid == -1) {
-            e_critical("failed on %d's blue fork\n", i);
+            err_sys("failed on %d's blue fork", i);
         }
 
         blue_pids[i] = pid;
@@ -433,9 +526,9 @@ int main(int argc, char **argv)
                 ;
 
             execlp(name, name + j + 1, num_buf, filename, NULL);
-            e_critical("%d red process exec failed\n", i);
+            err_sys("%d red process exec failed", i);
         } else if (pid == -1) {
-            e_critical("%d red process fork failed\n", i);
+            err_sys("%d red process fork failed", i);
         }
 
         red_pids[i] = pid;
@@ -446,7 +539,7 @@ int main(int argc, char **argv)
 
     //create monster pipe and monster process
     if (pipe(monster_pipe) < 0)
-        e_critical("monster pipe failed\n");
+        err_sys("monster pipe failed");
     if ((monster_pid = fork()) == 0) {
         int *pfd = monster_pipe;
         char *name = argv[2];
@@ -459,9 +552,9 @@ int main(int argc, char **argv)
             ;
 
         execlp(name, name + i + 1, NULL);
-        e_critical("monster process exec failed\n");
+        err_sys("monster process exec failed");
     } else if (monster_pid == -1) {
-        e_critical("monster process forking failed\n");
+        err_sys("monster process forking failed");
     }
     close(monster_pipe[0]);
 
@@ -475,7 +568,7 @@ int main(int argc, char **argv)
             if (rpid == red_pids[j])
                 fail = 0;
         if (fail) {
-            e_critical("an error in blue process has occured, terminating...");
+            err_quit("an error in blue process has occured, terminating...");
         }
     }
 
@@ -497,7 +590,7 @@ int main(int argc, char **argv)
                 msg_balance--;
             continue;
         }
-        e_critical("error in sync pipe\n");
+        err_sys("error in sync pipe");
     }
 
     //tell monster to kill our children
